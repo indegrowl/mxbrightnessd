@@ -15,7 +15,11 @@ use ring::prelude::*;
 const SAVE_DELAY: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
-    let (source, settings) = settings::load();
+    let settings::Loaded {
+        source,
+        settings,
+        manual_saved,
+    } = settings::load();
     let root = Path::new("/");
     let backlight = match Backlight::find(root, settings.backlight.as_deref()) {
         Ok(backlight) => backlight,
@@ -40,6 +44,7 @@ fn main() -> ExitCode {
         backlight,
         sensor_available,
         settings,
+        manual_saved,
         timing: Timing::default(),
     })
     .add_module(ServiceModule)

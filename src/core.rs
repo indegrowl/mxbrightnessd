@@ -58,15 +58,23 @@ pub struct CoreModule {
     /// A `SensorModule` is installed; without one auto mode acts as manual.
     pub sensor_available: bool,
     pub settings: Settings,
+    /// The settings hold a manual level of their own; when not, the
+    /// current backlight becomes the manual level.
+    pub manual_saved: bool,
     pub timing: Timing,
 }
 
 impl Module for CoreModule {
     fn install(self, app: &mut App) {
-        let (levels, gamma) = sanitize(&self.settings);
+        let (mut levels, gamma) = sanitize(&self.settings);
         let max = self.backlight.max;
         let start_raw = self.backlight.read_raw().ok();
         let start = start_raw.map_or(levels.manual, |raw| from_raw(raw, gamma, max));
+        // Never saved: keep the level the system booted with, not the default.
+        let seeded = !self.manual_saved && start_raw.is_some();
+        if seeded {
+            levels.manual = start;
+        }
         let mut core = Core {
             backlight: self.backlight,
             sensor_available: self.sensor_available,
@@ -90,6 +98,7 @@ impl Module for CoreModule {
             cancelled: Vec::new(),
             published: None,
             started: false,
+            seeded,
         };
         core.target = core.compute_target();
         app.insert_resource(core);
@@ -133,6 +142,8 @@ struct Core {
     cancelled: Vec<Token>,
     published: Option<Published>,
     started: bool,
+    /// The manual level came from the backlight at start and is not saved yet.
+    seeded: bool,
 }
 impl Resource for Core {}
 
@@ -264,9 +275,10 @@ fn publish(app: &mut App) {
 }
 
 /// Start: fade from the current backlight to the target, ask for the
-/// first reading, publish. Runs once, before the first wait.
+/// first reading, publish, and save a seeded manual level. Runs once,
+/// before the first wait.
 fn on_start(app: &mut App, _: &BeforeWait) {
-    let (read, sensor) = {
+    let (read, sensor, seed) = {
         let (mut core, mut ring) = app.query::<(ResMut<Core>, ResMut<Ring>)>();
         if core.started {
             return;
@@ -274,7 +286,8 @@ fn on_start(app: &mut App, _: &BeforeWait) {
         core.started = true;
         let target = core.target;
         core.retarget(&mut ring, target, AUTO_RATE);
-        (core.update_poll(&mut ring), core.sensor_available)
+        let seed = core.seeded.then(|| core.save_state());
+        (core.update_poll(&mut ring), core.sensor_available, seed)
     };
     if sensor {
         // The ranger starts at Sensitive; make the sensor match.
@@ -284,6 +297,11 @@ fn on_start(app: &mut App, _: &BeforeWait) {
         app.signal(ReadLux);
     }
     publish(app);
+    // The one SaveState not caused by the user: it saves the seeded
+    // manual level, so the settings (and the next start) agree with it.
+    if let Some(seed) = seed {
+        app.signal(seed);
+    }
 }
 
 fn on_io(app: &mut App, e: &IoEvent) {

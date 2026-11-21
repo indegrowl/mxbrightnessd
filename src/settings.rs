@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use app::prelude::*;
 use mxconfig::runtime::Drive;
-use mxconfig::{Diagnostic, Edit, Event, Source, Value};
+use mxconfig::{Diagnostic, Edit, Event, Origin, Source, Value};
 use ring::prelude::*;
 
 use crate::events::{SaveState, Settings, SettingsApplied};
@@ -37,20 +37,38 @@ const MANUAL: &str = "screen.manual";
 /// `poll(2)`'s `POLLIN`.
 const POLLIN: u32 = 1;
 
+/// What [`load`] found.
+pub struct Loaded {
+    /// For [`SettingsModule`].
+    pub source: Source,
+    pub settings: Settings,
+    /// Some layer sets `screen.manual`; else its value is the schema's
+    /// default, not a level anyone chose.
+    pub manual_saved: bool,
+}
+
 /// Open the settings from this system's files, synchronously.
-pub fn load() -> (Source, Settings) {
+pub fn load() -> Loaded {
     load_from(Source::new())
 }
 
 /// Open the settings through `source`. Without the namespace (it failed
-/// to open) the settings are the defaults.
-pub fn load_from(source: Source) -> (Source, Settings) {
+/// to open) the settings are the defaults and nothing is saved.
+pub fn load_from(source: Source) -> Loaded {
     // Watching before the request reads the files once, not twice;
     // `SettingsModule` takes its own copy of the fd, or logs the failure.
     let _ = source.inotify_fd();
     let config = open(&source);
     let settings = config.as_ref().map_or_else(Settings::default, read);
-    (source, settings)
+    let manual_saved = config.as_ref().is_some_and(|config| {
+        let origin = config.settings().resolved().origin(MANUAL).cloned();
+        !matches!(origin, None | Some(Origin::Schema))
+    });
+    Loaded {
+        source,
+        settings,
+        manual_saved,
+    }
 }
 
 /// Request the namespace and take its answer: from files it comes at once.

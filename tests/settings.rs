@@ -48,7 +48,7 @@ fn note_applied(app: &mut App, e: &SettingsApplied) {
 }
 
 fn app(dir: &TempDir) -> App {
-    let (source, _) = load_from(source(dir));
+    let source = load_from(source(dir)).source;
     let mut app = App::new();
     app.add_module(RingModule::default())
         .add_module(SettingsModule {
@@ -103,7 +103,7 @@ fn inode(path: &Path) -> Option<u64> {
 #[test]
 fn defaults_load() {
     let dir = TempDir::new().unwrap();
-    let (_, settings) = load_from(source(&dir));
+    let settings = load_from(source(&dir)).settings;
     assert_eq!(settings, Settings::default());
 }
 
@@ -111,7 +111,7 @@ fn defaults_load() {
 fn user_file_overrides() {
     let dir = TempDir::new().unwrap();
     write_user(&dir, "[screen]\nminimum = 0.1\n");
-    let (_, settings) = load_from(source(&dir));
+    let settings = load_from(source(&dir)).settings;
     assert_eq!(settings.minimum, 0.1);
     assert_eq!(settings.gamma, 2.2);
 }
@@ -125,7 +125,7 @@ fn every_key_is_read() {
          [curve]\nlux = [1.0, 100.0]\nlevel = [0.2, 0.9]\n\
          [device]\nbacklight = \"panel\"\nsensor = \"opt3001\"\n",
     );
-    let (_, settings) = load_from(source(&dir));
+    let settings = load_from(source(&dir)).settings;
     let expected = Settings {
         auto: false,
         offset: -0.2,
@@ -143,7 +143,7 @@ fn every_key_is_read() {
 fn bad_curve_falls_back() {
     let dir = TempDir::new().unwrap();
     write_user(&dir, "[curve]\nlux = [0.1, 1.0, 10.0]\n");
-    let (_, settings) = load_from(source(&dir));
+    let settings = load_from(source(&dir)).settings;
     assert_eq!(settings.curve, Curve::default());
 }
 
@@ -151,7 +151,7 @@ fn bad_curve_falls_back() {
 fn unsorted_curve_falls_back() {
     let dir = TempDir::new().unwrap();
     write_user(&dir, "[curve]\nlux = [10.0, 1.0]\nlevel = [0.5, 0.6]\n");
-    let (_, settings) = load_from(source(&dir));
+    let settings = load_from(source(&dir)).settings;
     assert_eq!(settings.curve, Curve::default());
 }
 
@@ -159,7 +159,7 @@ fn unsorted_curve_falls_back() {
 fn non_finite_falls_back() {
     let dir = TempDir::new().unwrap();
     write_user(&dir, "[screen]\ngamma = nan\noffset = inf\nminimum = 0.1\n");
-    let (_, settings) = load_from(source(&dir));
+    let settings = load_from(source(&dir)).settings;
     assert_eq!(settings.gamma, 2.2);
     assert_eq!(settings.offset, 0.0);
     assert_eq!(settings.minimum, 0.1);
@@ -195,7 +195,7 @@ fn drag_saves_once() {
         applied(&app).is_empty(),
         "our own write is not applied back"
     );
-    assert_eq!(load_from(source(&dir)).1.manual, 0.3 + 0.01 * 19.0);
+    assert_eq!(load_from(source(&dir)).settings.manual, 0.3 + 0.01 * 19.0);
 }
 
 #[test]
@@ -250,4 +250,44 @@ fn file_edit_while_saving_keeps_the_pending_state() {
     assert_eq!(float(&file, "screen", "manual"), 0.6);
     assert_eq!(float(&file, "screen", "minimum"), 0.2);
     assert_eq!(applied(&app).len(), 1, "the save's echo is not applied");
+}
+
+#[test]
+fn manual_saved_only_when_set() {
+    let dir = TempDir::new().unwrap();
+    assert!(!load_from(source(&dir)).manual_saved);
+    write_user(&dir, "[screen]\nminimum = 0.1\n");
+    assert!(!load_from(source(&dir)).manual_saved);
+    write_user(&dir, "[screen]\nmanual = 0.5\n");
+    assert!(load_from(source(&dir)).manual_saved);
+}
+
+#[test]
+fn seeded_manual_survives_an_unrelated_edit() {
+    let dir = TempDir::new().unwrap();
+    let mut app = app(&dir);
+    // What the core sends at start when it seeds manual from the backlight.
+    send(
+        &mut app,
+        SaveState {
+            auto: true,
+            offset: 0.0,
+            manual: 0.83,
+        },
+    );
+    run_until(&mut app, Duration::from_secs(1), |_| {
+        user_file(&dir).exists()
+    });
+    let mut file = read_user(&dir);
+    file["screen"]
+        .as_table_mut()
+        .unwrap()
+        .insert("minimum".into(), 0.2.into());
+    fs::write(user_file(&dir), file.to_string()).unwrap();
+    run_until(&mut app, Duration::from_secs(2), |app| {
+        !applied(app).is_empty()
+    });
+    let got = applied(&app).last().unwrap().clone();
+    assert_eq!(got.minimum, 0.2);
+    assert_eq!(got.manual, 0.83, "{got:?}");
 }

@@ -74,6 +74,10 @@ fn slow_timing() -> Timing {
 }
 
 fn app_timed(fake: &FakeSys, settings: Settings, timing: Timing) -> App {
+    app_full(fake, settings, timing, true)
+}
+
+fn app_full(fake: &FakeSys, settings: Settings, timing: Timing, manual_saved: bool) -> App {
     let backlight = Backlight::find(fake.root(), None).expect("backlight");
     let sensor = LightSensor::find(fake.root(), None);
     let sensor_available = sensor.is_some();
@@ -86,6 +90,7 @@ fn app_timed(fake: &FakeSys, settings: Settings, timing: Timing) -> App {
         backlight,
         sensor_available,
         settings,
+        manual_saved,
         timing,
     })
     .init_resource::<Seen>()
@@ -358,4 +363,18 @@ fn steady_noisy_light_stops_moving() {
     flip(&mut app, 1500);
     let after = flip(&mut app, 1000);
     assert!(after.windows(2).all(|w| w[0] == w[1]), "{after:?}");
+}
+
+#[test]
+fn unsaved_manual_keeps_the_current_level() {
+    let fake = fake(178, None);
+    let mut app = app_full(&fake, Settings::default(), timing(), false);
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), 178);
+    let start = from_raw(178, 2.2, MAX);
+    assert!((last_published(&app).brightness - start).abs() < 1e-9);
+    let saved = app.resource::<Seen>().saved.clone();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert!((saved[0].manual - start).abs() < 1e-9, "{saved:?}");
+    assert!(saved[0].auto && saved[0].offset == 0.0, "{saved:?}");
 }
