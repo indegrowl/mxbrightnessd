@@ -1,7 +1,6 @@
 [Unit]
 Description=Mechanix brightness daemon
-PartOf=mechanix-session.target
-After=mechanix-session.target
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=/usr/bin/mxbrightnessd
