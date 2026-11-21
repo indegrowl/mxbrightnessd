@@ -4,4 +4,5 @@ pub mod events;
 pub mod fade;
 pub mod model;
 pub mod sensor;
+pub mod service;
 pub mod smooth;
