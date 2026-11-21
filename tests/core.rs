@@ -378,3 +378,25 @@ fn unsaved_manual_keeps_the_current_level() {
     assert!((saved[0].manual - start).abs() < 1e-9, "{saved:?}");
     assert!(saved[0].auto && saved[0].offset == 0.0, "{saved:?}");
 }
+
+#[test]
+fn auto_back_on_waits_for_a_fresh_reading() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.30));
+    send(&mut app, UserSetAuto(false));
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.5));
+    assert_eq!(last_published(&app).ambient_lux, None);
+    fake.set_lux(0, "garbage");
+    send(&mut app, UserSetAuto(true));
+    run_for(&mut app, Duration::from_millis(300));
+    // The old 0.3 lux would say 0.30; without a reading it holds.
+    assert_eq!(fake.raw(BL), raw(0.5));
+    let p = last_published(&app);
+    assert_eq!((p.brightness, p.ambient_lux), (0.5, None), "{p:?}");
+    fake.set_lux(0, "30");
+    run_for(&mut app, SETTLE);
+    assert!(near(fake.raw(BL), raw(0.75), 1), "{}", fake.raw(BL));
+}

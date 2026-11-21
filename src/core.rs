@@ -216,7 +216,8 @@ impl Core {
     }
 
     /// Starts the poll timer if auto mode needs it and stops it if not.
-    /// Returns whether a reading should be asked for now.
+    /// Stopping forgets the light, so auto mode back on holds until a
+    /// fresh reading. Returns whether a reading should be asked for now.
     fn update_poll(&mut self, ring: &mut Ring) -> bool {
         match (self.polling(), self.poll) {
             (true, None) => {
@@ -227,6 +228,8 @@ impl Core {
                 let cancel = ring.cancel(token);
                 self.cancelled.extend([token, cancel]);
                 self.poll = None;
+                self.smoother.reset();
+                self.last_reading = None;
                 false
             }
             _ => false,
@@ -346,6 +349,10 @@ fn on_io(app: &mut App, e: &IoEvent) {
 fn on_lux(app: &mut App, e: &LuxRead) {
     let range = {
         let (mut core, mut ring) = app.query::<(ResMut<Core>, ResMut<Ring>)>();
+        // A reading still in flight when auto mode stopped.
+        if !core.polling() {
+            return;
+        }
         let lux = match &e.0 {
             Ok(lux) if lux.is_finite() && *lux >= 0.0 => *lux,
             Ok(lux) => return core.read_failed(&format!("invalid lux {lux}")),
