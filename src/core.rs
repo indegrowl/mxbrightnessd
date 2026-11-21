@@ -23,6 +23,9 @@ use crate::fade::{AUTO_RATE, Fade, USER_RATE};
 use crate::model::{Curve, Levels, from_raw, to_raw};
 use crate::smooth::{Range, Ranger, Smoother, worth_moving};
 
+/// The relative change in smoothed lux that is published.
+const LUX_STEP: f64 = 0.05;
+
 /// The core's clocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timing {
@@ -241,8 +244,20 @@ impl Core {
             brightness: self.target,
             auto: self.levels.auto,
             minimum: self.levels.minimum,
-            ambient_lux: self.lux(),
+            ambient_lux: self.shown_lux(),
             auto_available: self.sensor_available,
+        }
+    }
+
+    /// The lux to publish: the smoothed lux once it is [`LUX_STEP`] away
+    /// from the one published, so a steady light does not change the
+    /// property every poll.
+    fn shown_lux(&self) -> Option<f64> {
+        let new = self.lux();
+        let old = self.published.as_ref().and_then(|p| p.ambient_lux);
+        match (new, old) {
+            (Some(new), Some(old)) if (new - old).abs() < LUX_STEP * old => Some(old),
+            _ => new,
         }
     }
 

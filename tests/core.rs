@@ -400,3 +400,22 @@ fn auto_back_on_waits_for_a_fresh_reading() {
     run_for(&mut app, SETTLE);
     assert!(near(fake.raw(BL), raw(0.75), 1), "{}", fake.raw(BL));
 }
+
+#[test]
+fn ambient_lux_publishes_only_real_changes() {
+    let fake = fake(128, Some("100"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    let shown = last_published(&app).ambient_lux.unwrap();
+    assert!((shown - 100.0).abs() < 1e-6, "{shown}");
+    let from = app.resource::<Seen>().published.len();
+    // 3 % more light moves neither the level nor the published lux.
+    fake.set_lux(0, "103");
+    run_for(&mut app, Duration::from_millis(300));
+    let during = &app.resource::<Seen>().published[from..];
+    assert!(during.is_empty(), "{during:?}");
+    fake.set_lux(0, "110");
+    run_for(&mut app, Duration::from_millis(300));
+    let shown = last_published(&app).ambient_lux.unwrap();
+    assert!((105.0..=110.0).contains(&shown), "{shown}");
+}
