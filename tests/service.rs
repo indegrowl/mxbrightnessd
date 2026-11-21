@@ -4,7 +4,7 @@ use app::prelude::*;
 use dbus::fake::{FakeBus, UNIQUE};
 use dbus::*;
 use mxbrightnessd::events::{Published, UserSetAuto, UserSetBrightness};
-use mxbrightnessd::service::{INTERFACE, NAME, PATH, ServiceModule};
+use mxbrightnessd::service::{ExitStatus, INTERFACE, NAME, PATH, ServiceModule};
 use ring::prelude::*;
 
 const PROPS: &str = "org.freedesktop.DBus.Properties";
@@ -44,6 +44,10 @@ fn fake() -> FakeBus {
 
 fn stopped(f: &FakeBus) -> bool {
     f.app.resource::<Ring>().is_stopped()
+}
+
+fn failed(f: &FakeBus) -> bool {
+    f.app.resource::<ExitStatus>().failed()
 }
 
 /// Send a call to the service and return its answer.
@@ -113,6 +117,7 @@ fn requests_the_name_without_queueing() {
     f.reply(&call, &(1u32,));
     f.turn();
     assert!(!stopped(&f));
+    assert!(!failed(&f));
 }
 
 #[test]
@@ -125,6 +130,7 @@ fn name_taken_stops() {
     f.reply(&call, &(3u32,)); // EXISTS
     f.turn();
     assert!(stopped(&f));
+    assert!(failed(&f));
 }
 
 #[test]
@@ -137,6 +143,7 @@ fn name_request_error_stops() {
     f.error(&call, "org.freedesktop.DBus.Error.AccessDenied", "no");
     f.turn();
     assert!(stopped(&f));
+    assert!(failed(&f));
 }
 
 #[test]
@@ -151,6 +158,16 @@ fn name_lost_stops() {
     );
     f.turn();
     assert!(stopped(&f));
+    assert!(failed(&f));
+}
+
+#[test]
+fn bus_disconnect_stops() {
+    let f = fake();
+    let mut app = f.hang_up();
+    Ring::turn(&mut app);
+    assert!(app.resource::<Ring>().is_stopped());
+    assert!(app.resource::<ExitStatus>().failed());
 }
 
 #[test]

@@ -3,8 +3,12 @@
 //! Properties mirror [`Published`]; a peer's `Set` on `Brightness` or
 //! `Auto` becomes [`UserSetBrightness`] or [`UserSetAuto`] and is not
 //! stored here: the property changes when the core publishes. Without
-//! the name the daemon has no purpose, so failing to own it, or losing
-//! it, stops the ring.
+//! the name the daemon has no purpose, so failing to own it, losing it,
+//! or losing the session bus stops the ring and marks [`ExitStatus`]
+//! failed.
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use app::prelude::*;
 use dbus::prelude::*;
@@ -23,6 +27,22 @@ const PRIMARY_OWNER: u32 = 1;
 /// Exports the interface and owns the name. Install after `DBusModule`
 /// with the session bus.
 pub struct ServiceModule;
+
+/// Whether the daemon stopped on an error. Clones share one flag, so
+/// `main` keeps a clone across `App::run` to pick its exit code.
+#[derive(Clone, Debug, Default)]
+pub struct ExitStatus(Rc<Cell<bool>>);
+impl Resource for ExitStatus {}
+
+impl ExitStatus {
+    pub fn fail(&self) {
+        self.0.set(true);
+    }
+
+    pub fn failed(&self) -> bool {
+        self.0.get()
+    }
+}
 
 struct Service {
     export: ExportId,
@@ -48,15 +68,19 @@ impl Module for ServiceModule {
             Service { export, request }
         };
         app.insert_resource(service);
-        app.system(on_name_reply)
+        app.init_resource::<ExitStatus>()
+            .system(on_name_reply)
             .system(on_name_lost)
+            .system(on_disconnected)
             .system(on_set)
             .system(on_published);
     }
 }
 
-fn give_up(app: &mut App) {
-    eprintln!("mxbrightnessd: could not own {NAME}");
+/// Stop on an error, after logging `why`.
+fn give_up(app: &mut App, why: &str) {
+    eprintln!("mxbrightnessd: {why}");
+    app.resource::<ExitStatus>().fail();
     app.signal(Stop);
 }
 
@@ -69,13 +93,19 @@ fn on_name_reply(app: &mut App, e: &MethodReply) {
         Err(_) => false,
     };
     if !owned {
-        give_up(app);
+        give_up(app, &format!("could not own {NAME}"));
     }
 }
 
 fn on_name_lost(app: &mut App, e: &NameLost) {
     if e.bus == BusId::Session && e.name.as_str() == NAME {
-        give_up(app);
+        give_up(app, &format!("lost {NAME}"));
+    }
+}
+
+fn on_disconnected(app: &mut App, e: &BusDisconnected) {
+    if e.bus == BusId::Session {
+        give_up(app, "session bus disconnected");
     }
 }
 
