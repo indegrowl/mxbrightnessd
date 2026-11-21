@@ -1,0 +1,8 @@
+[Unit]
+Description=Mechanix brightness daemon
+PartOf=mechanix-session.target
+After=mechanix-session.target
+
+[Service]
+ExecStart=/usr/bin/mxbrightnessd
+Restart=on-failure
