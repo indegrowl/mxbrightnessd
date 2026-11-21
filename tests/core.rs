@@ -1,0 +1,292 @@
+#[path = "fake_sys.rs"]
+mod fake_sys;
+
+use std::time::Duration;
+
+use app::prelude::*;
+use fake_sys::FakeSys;
+use mxbrightnessd::core::{CoreModule, Timing};
+use mxbrightnessd::devices::{Backlight, LightSensor};
+use mxbrightnessd::events::{
+    LuxRead, Published, SaveState, Settings, SettingsApplied, UserSetAuto, UserSetBrightness,
+};
+use mxbrightnessd::model::to_raw;
+use mxbrightnessd::sensor::SensorModule;
+use ring::prelude::*;
+
+const BL: &str = "panel";
+const MAX: u32 = 255;
+/// Long enough for any fade in these tests (at most 1 p at 1/1.5 p/s)
+/// plus smoothing.
+const SETTLE: Duration = Duration::from_millis(2000);
+
+fn raw(p: f64) -> u32 {
+    to_raw(p, 2.2, MAX)
+}
+
+fn timing() -> Timing {
+    Timing {
+        poll: Duration::from_millis(20),
+        frame: Duration::from_millis(5),
+        hold: Duration::from_millis(100),
+        rise: Duration::from_millis(10),
+        fall: Duration::from_millis(10),
+    }
+}
+
+#[derive(Default)]
+struct Seen {
+    published: Vec<Published>,
+    saved: Vec<SaveState>,
+}
+impl Resource for Seen {}
+
+fn note_published(app: &mut App, e: &Published) {
+    app.resource_mut::<Seen>().published.push(e.clone());
+}
+
+fn note_saved(app: &mut App, e: &SaveState) {
+    app.resource_mut::<Seen>().saved.push(*e);
+}
+
+/// A fake /sys with backlight `panel` at `cur` and, if `lux` is given, an
+/// opt3001 reading it.
+fn fake(cur: u32, lux: Option<&str>) -> FakeSys {
+    let fake = FakeSys::new();
+    fake.backlight(BL, "raw", MAX, cur);
+    if let Some(lux) = lux {
+        fake.sensor(0, "opt3001", lux, true);
+    }
+    fake
+}
+
+fn app_with(fake: &FakeSys, settings: Settings) -> App {
+    let backlight = Backlight::find(fake.root(), None).expect("backlight");
+    let sensor = LightSensor::find(fake.root(), None);
+    let sensor_available = sensor.is_some();
+    let mut app = App::new();
+    app.add_module(RingModule::default());
+    if let Some(sensor) = sensor {
+        app.add_module(SensorModule { sensor });
+    }
+    app.add_module(CoreModule {
+        backlight,
+        sensor_available,
+        settings,
+        timing: timing(),
+    })
+    .init_resource::<Seen>()
+    .system(note_published)
+    .system(note_saved);
+    app
+}
+
+/// Turns the ring for `limit` of real time.
+fn run_for(app: &mut App, limit: Duration) {
+    let timer = app.resource_mut::<Ring>().timeout(limit);
+    loop {
+        Ring::turn(app);
+        if app.resource_mut::<Ring>().finish(timer).is_some() {
+            return;
+        }
+    }
+}
+
+fn send(app: &mut App, signal: impl Signal) {
+    app.signal(signal);
+    app.flush();
+}
+
+fn last_published(app: &App) -> Published {
+    app.resource::<Seen>()
+        .published
+        .last()
+        .cloned()
+        .expect("a Published")
+}
+
+fn near(a: u32, b: u32, tol: u32) -> bool {
+    a.abs_diff(b) <= tol
+}
+
+#[test]
+fn starts_from_current_backlight() {
+    let fake = fake(178, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    let timer = app.resource_mut::<Ring>().timeout(SETTLE);
+    let mut first = None;
+    while first.is_none() {
+        Ring::turn(&mut app);
+        let now = fake.raw(BL);
+        if now != 178 {
+            first = Some(now);
+        }
+        assert!(
+            app.resource_mut::<Ring>().finish(timer).is_none(),
+            "backlight never moved"
+        );
+    }
+    let first = first.unwrap();
+    assert!(near(first, 178, 3), "first write {first} jumped from 178");
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.30));
+}
+
+#[test]
+fn auto_follows_light() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.30));
+    let p = last_published(&app);
+    assert!(p.auto && p.auto_available);
+    assert!((p.ambient_lux.unwrap() - 0.3).abs() < 1e-9, "{p:?}");
+    fake.set_lux(0, "300");
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), 255);
+}
+
+#[test]
+fn user_set_shifts_offset() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    send(&mut app, UserSetBrightness(0.40));
+    run_for(&mut app, Duration::from_millis(500));
+    assert_eq!(fake.raw(BL), raw(0.40));
+    let saved = app.resource::<Seen>().saved.clone();
+    assert_eq!(saved.len(), 1);
+    assert!(saved[0].auto && (saved[0].offset - 0.10).abs() < 1e-9);
+    fake.set_lux(0, "3");
+    run_for(&mut app, SETTLE);
+    assert!(near(fake.raw(BL), raw(0.60), 1), "{}", fake.raw(BL));
+}
+
+#[test]
+fn hold_blocks_auto_after_set() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    send(&mut app, UserSetBrightness(0.40));
+    let from = app.resource::<Seen>().published.len();
+    assert_eq!(last_published(&app).brightness, 0.40);
+    fake.set_lux(0, "300");
+    run_for(&mut app, Duration::from_millis(60));
+    let during = &app.resource::<Seen>().published[from..];
+    assert!(during.iter().all(|p| p.brightness == 0.40), "{during:?}");
+    // Once the hold is over the light takes over again.
+    run_for(&mut app, SETTLE);
+    assert!(last_published(&app).brightness > 0.9);
+}
+
+#[test]
+fn failed_read_holds_level() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    let before = fake.raw(BL);
+    let target = last_published(&app).brightness;
+    fake.set_lux(0, "garbage");
+    run_for(&mut app, Duration::from_millis(250)); // > 10 polls
+    assert_eq!(fake.raw(BL), before);
+    assert_eq!(last_published(&app).brightness, target);
+}
+
+#[test]
+fn invalid_readings_and_sets_are_ignored() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    let before = fake.raw(BL);
+    let published = last_published(&app);
+    send(&mut app, LuxRead(Ok(f64::NAN)));
+    send(&mut app, LuxRead(Ok(-5.0)));
+    send(&mut app, LuxRead(Ok(f64::INFINITY)));
+    send(&mut app, UserSetBrightness(f64::NAN));
+    send(&mut app, UserSetBrightness(f64::INFINITY));
+    run_for(&mut app, Duration::from_millis(50));
+    assert_eq!(fake.raw(BL), before);
+    assert_eq!(last_published(&app).brightness, published.brightness);
+    assert!(app.resource::<Seen>().saved.is_empty());
+}
+
+#[test]
+fn manual_ignores_sensor() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, Duration::from_millis(100));
+    send(&mut app, UserSetAuto(false));
+    send(&mut app, UserSetBrightness(0.5));
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.5));
+    let p = last_published(&app);
+    assert!(!p.auto && p.brightness == 0.5, "{p:?}");
+    let saved = app.resource::<Seen>().saved.clone();
+    assert_eq!(saved.len(), 2);
+    assert!(!saved[1].auto && saved[1].manual == 0.5);
+    fake.set_lux(0, "300");
+    run_for(&mut app, Duration::from_millis(300));
+    assert_eq!(fake.raw(BL), raw(0.5));
+}
+
+#[test]
+fn no_sensor_is_manual_and_unavailable() {
+    let fake = fake(128, None);
+    let settings = Settings {
+        manual: 0.7,
+        ..Settings::default()
+    };
+    let mut app = app_with(&fake, settings);
+    run_for(&mut app, SETTLE);
+    let p = last_published(&app);
+    assert!(!p.auto_available, "{p:?}");
+    assert_eq!(p.brightness, 0.7);
+    assert_eq!(p.ambient_lux, None);
+    assert_eq!(fake.raw(BL), raw(0.7));
+}
+
+#[test]
+fn drag_retargets_fade() {
+    let fake = fake(128, Some("0.3"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, SETTLE);
+    for i in 1..=20 {
+        send(&mut app, UserSetBrightness(0.40 + 0.02 * i as f64));
+        run_for(&mut app, Duration::from_millis(5));
+    }
+    assert!((last_published(&app).brightness - 0.80).abs() < 1e-9);
+    run_for(&mut app, Duration::from_millis(500));
+    assert_eq!(fake.raw(BL), raw(0.80));
+    assert_eq!(app.resource::<Seen>().saved.len(), 20);
+}
+
+#[test]
+fn settings_apply_and_bad_values_are_clamped() {
+    let fake = fake(128, None);
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, Duration::from_millis(100));
+    let bad = Settings {
+        manual: 0.6,
+        minimum: f64::NAN,
+        gamma: f64::NAN,
+        ..Settings::default()
+    };
+    send(&mut app, SettingsApplied(bad));
+    run_for(&mut app, SETTLE);
+    let p = last_published(&app);
+    assert_eq!((p.brightness, p.minimum), (0.6, 0.05));
+    assert_eq!(fake.raw(BL), raw(0.6));
+    send(
+        &mut app,
+        SettingsApplied(Settings {
+            manual: 0.0,
+            minimum: 7.0,
+            ..Settings::default()
+        }),
+    );
+    run_for(&mut app, SETTLE);
+    let p = last_published(&app);
+    assert_eq!((p.brightness, p.minimum), (1.0, 1.0));
+    assert_eq!(fake.raw(BL), 255);
+    assert!(app.resource::<Seen>().saved.is_empty());
+}
