@@ -16,9 +16,9 @@ use ring::prelude::*;
 
 const BL: &str = "panel";
 const MAX: u32 = 255;
-/// Long enough for any fade in these tests (at most 1 p at 1/1.5 p/s)
-/// plus smoothing.
-const SETTLE: Duration = Duration::from_millis(2000);
+/// Long enough for any fade in these tests (at most 1 p darkening at
+/// 0.10 p/s) plus smoothing.
+const SETTLE: Duration = Duration::from_secs(12);
 
 fn raw(p: f64) -> u32 {
     to_raw(p, 2.2, MAX)
@@ -110,6 +110,29 @@ fn run_for(app: &mut App, limit: Duration) {
     }
 }
 
+/// Turns the ring until `done` holds or [`SETTLE`] passes.
+fn settle(app: &mut App, mut done: impl FnMut(&App) -> bool) {
+    let timer = app.resource_mut::<Ring>().timeout(SETTLE);
+    while !done(app) {
+        Ring::turn(app);
+        if app.resource_mut::<Ring>().finish(timer).is_some() {
+            return;
+        }
+    }
+    let cancel = app.resource_mut::<Ring>().cancel(timer);
+    let mut pending = vec![timer, cancel];
+    while !pending.is_empty() {
+        Ring::turn(app);
+        let mut ring = app.resource_mut::<Ring>();
+        pending.retain(|&t| ring.finish(t).is_none());
+    }
+}
+
+/// Settles until backlight `BL` of `fake` reads `want`.
+fn settle_at(app: &mut App, fake: &FakeSys, want: u32) {
+    settle(app, |_| fake.raw(BL) == want);
+}
+
 fn send(app: &mut App, signal: impl Signal) {
     app.signal(signal);
     app.flush();
@@ -146,7 +169,7 @@ fn starts_from_current_backlight() {
     }
     let first = first.unwrap();
     assert!(near(first, 178, 3), "first write {first} jumped from 178");
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     assert_eq!(fake.raw(BL), raw(0.30));
 }
 
@@ -154,13 +177,13 @@ fn starts_from_current_backlight() {
 fn auto_follows_light() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     assert_eq!(fake.raw(BL), raw(0.30));
     let p = last_published(&app);
     assert!(p.auto && p.auto_available);
     assert!((p.ambient_lux.unwrap() - 0.3).abs() < 1e-9, "{p:?}");
     fake.set_lux(0, "300");
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, 255);
     assert_eq!(fake.raw(BL), 255);
 }
 
@@ -168,7 +191,7 @@ fn auto_follows_light() {
 fn user_set_shifts_offset() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     send(&mut app, UserSetBrightness(0.40));
     run_for(&mut app, Duration::from_millis(500));
     assert_eq!(fake.raw(BL), raw(0.40));
@@ -176,7 +199,7 @@ fn user_set_shifts_offset() {
     assert_eq!(saved.len(), 1);
     assert!(saved[0].auto && (saved[0].offset - 0.10).abs() < 1e-9);
     fake.set_lux(0, "3");
-    run_for(&mut app, SETTLE);
+    settle(&mut app, |_| near(fake.raw(BL), raw(0.60), 1));
     assert!(near(fake.raw(BL), raw(0.60), 1), "{}", fake.raw(BL));
 }
 
@@ -184,7 +207,7 @@ fn user_set_shifts_offset() {
 fn hold_blocks_auto_after_set() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     send(&mut app, UserSetBrightness(0.40));
     let from = app.resource::<Seen>().published.len();
     assert_eq!(last_published(&app).brightness, 0.40);
@@ -193,7 +216,7 @@ fn hold_blocks_auto_after_set() {
     let during = &app.resource::<Seen>().published[from..];
     assert!(during.iter().all(|p| p.brightness == 0.40), "{during:?}");
     // Once the hold is over the light takes over again.
-    run_for(&mut app, SETTLE);
+    settle(&mut app, |app| last_published(app).brightness > 0.9);
     assert!(last_published(&app).brightness > 0.9);
 }
 
@@ -201,7 +224,7 @@ fn hold_blocks_auto_after_set() {
 fn failed_read_holds_level() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     let before = fake.raw(BL);
     let target = last_published(&app).brightness;
     fake.set_lux(0, "garbage");
@@ -214,7 +237,7 @@ fn failed_read_holds_level() {
 fn invalid_readings_and_sets_are_ignored() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     let before = fake.raw(BL);
     let published = last_published(&app);
     send(&mut app, LuxRead(Ok(f64::NAN)));
@@ -235,7 +258,7 @@ fn manual_ignores_sensor() {
     run_for(&mut app, Duration::from_millis(100));
     send(&mut app, UserSetAuto(false));
     send(&mut app, UserSetBrightness(0.5));
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.5));
     assert_eq!(fake.raw(BL), raw(0.5));
     let p = last_published(&app);
     assert!(!p.auto && p.brightness == 0.5, "{p:?}");
@@ -255,7 +278,7 @@ fn no_sensor_is_manual_and_unavailable() {
         ..Settings::default()
     };
     let mut app = app_with(&fake, settings);
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.7));
     let p = last_published(&app);
     assert!(!p.auto_available, "{p:?}");
     assert_eq!(p.brightness, 0.7);
@@ -267,7 +290,7 @@ fn no_sensor_is_manual_and_unavailable() {
 fn drag_retargets_fade() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     for i in 1..=20 {
         send(&mut app, UserSetBrightness(0.40 + 0.02 * i as f64));
         run_for(&mut app, Duration::from_millis(5));
@@ -290,7 +313,7 @@ fn settings_apply_and_bad_values_are_clamped() {
         ..Settings::default()
     };
     send(&mut app, SettingsApplied(bad));
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.6));
     let p = last_published(&app);
     assert_eq!((p.brightness, p.minimum), (0.6, 0.05));
     assert_eq!(fake.raw(BL), raw(0.6));
@@ -302,7 +325,7 @@ fn settings_apply_and_bad_values_are_clamped() {
             ..Settings::default()
         }),
     );
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, 255);
     let p = last_published(&app);
     assert_eq!((p.brightness, p.minimum), (1.0, 1.0));
     assert_eq!(fake.raw(BL), 255);
@@ -318,7 +341,7 @@ fn auto_start_holds_until_first_reading() {
     let start = from_raw(178, 2.2, MAX);
     assert!((last_published(&app).brightness - start).abs() < 1e-9);
     fake.set_lux(0, "0.3");
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     assert_eq!(fake.raw(BL), raw(0.30));
 }
 
@@ -326,10 +349,10 @@ fn auto_start_holds_until_first_reading() {
 fn slow_smoothing_darkening_settles_on_curve() {
     let fake = fake(128, Some("300"));
     let mut app = app_timed(&fake, Settings::default(), slow_timing());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, 255);
     assert_eq!(fake.raw(BL), 255);
     fake.set_lux(0, "3");
-    run_for(&mut app, SETTLE);
+    settle(&mut app, |_| near(fake.raw(BL), raw(0.50), 1));
     assert!(near(fake.raw(BL), raw(0.50), 1), "{}", fake.raw(BL));
 }
 
@@ -337,10 +360,10 @@ fn slow_smoothing_darkening_settles_on_curve() {
 fn slow_smoothing_brightening_settles_on_curve() {
     let fake = fake(128, Some("3"));
     let mut app = app_timed(&fake, Settings::default(), slow_timing());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.50));
     assert_eq!(fake.raw(BL), raw(0.50));
     fake.set_lux(0, "30");
-    run_for(&mut app, SETTLE);
+    settle(&mut app, |_| near(fake.raw(BL), raw(0.75), 1));
     assert!(near(fake.raw(BL), raw(0.75), 1), "{}", fake.raw(BL));
 }
 
@@ -369,7 +392,7 @@ fn steady_noisy_light_stops_moving() {
 fn unsaved_manual_keeps_the_current_level() {
     let fake = fake(178, None);
     let mut app = app_full(&fake, Settings::default(), timing(), false);
-    run_for(&mut app, SETTLE);
+    run_for(&mut app, Duration::from_secs(2));
     assert_eq!(fake.raw(BL), 178);
     let start = from_raw(178, 2.2, MAX);
     assert!((last_published(&app).brightness - start).abs() < 1e-9);
@@ -383,10 +406,10 @@ fn unsaved_manual_keeps_the_current_level() {
 fn auto_back_on_waits_for_a_fresh_reading() {
     let fake = fake(128, Some("0.3"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.30));
     assert_eq!(fake.raw(BL), raw(0.30));
     send(&mut app, UserSetAuto(false));
-    run_for(&mut app, SETTLE);
+    settle_at(&mut app, &fake, raw(0.5));
     assert_eq!(fake.raw(BL), raw(0.5));
     assert_eq!(last_published(&app).ambient_lux, None);
     fake.set_lux(0, "garbage");
@@ -397,7 +420,7 @@ fn auto_back_on_waits_for_a_fresh_reading() {
     let p = last_published(&app);
     assert_eq!((p.brightness, p.ambient_lux), (0.5, None), "{p:?}");
     fake.set_lux(0, "30");
-    run_for(&mut app, SETTLE);
+    settle(&mut app, |_| near(fake.raw(BL), raw(0.75), 1));
     assert!(near(fake.raw(BL), raw(0.75), 1), "{}", fake.raw(BL));
 }
 
@@ -405,7 +428,13 @@ fn auto_back_on_waits_for_a_fresh_reading() {
 fn ambient_lux_publishes_only_real_changes() {
     let fake = fake(128, Some("100"));
     let mut app = app_with(&fake, Settings::default());
-    run_for(&mut app, SETTLE);
+    settle(&mut app, |app| {
+        let p = app.resource::<Seen>().published.last().cloned();
+        p.is_some_and(|p| {
+            p.ambient_lux.is_some_and(|l| (l - 100.0).abs() < 1e-6)
+                && fake.raw(BL) == raw(p.brightness)
+        })
+    });
     let shown = last_published(&app).ambient_lux.unwrap();
     assert!((shown - 100.0).abs() < 1e-6, "{shown}");
     let from = app.resource::<Seen>().published.len();
@@ -418,4 +447,39 @@ fn ambient_lux_publishes_only_real_changes() {
     run_for(&mut app, Duration::from_millis(300));
     let shown = last_published(&app).ambient_lux.unwrap();
     assert!((105.0..=110.0).contains(&shown), "{shown}");
+}
+
+#[test]
+fn slider_drag_moves_smoothly() {
+    let start = 0.30;
+    let fake = fake(raw(start), None);
+    let settings = Settings {
+        manual: start,
+        ..Settings::default()
+    };
+    // Frames as in production.
+    let timing = Timing {
+        frame: Duration::from_millis(16),
+        ..timing()
+    };
+    let mut app = app_timed(&fake, settings, timing);
+    run_for(&mut app, Duration::from_millis(100));
+    assert_eq!(fake.raw(BL), raw(start));
+    // The launcher sends slider values about every 50 ms; the last one
+    // gets 400 ms to land.
+    let mut seen = vec![fake.raw(BL)];
+    for i in 1..=6 {
+        send(&mut app, UserSetBrightness(start + 0.05 * i as f64));
+        let wait = if i == 6 { 400 } else { 50 };
+        let timer = app
+            .resource_mut::<Ring>()
+            .timeout(Duration::from_millis(wait));
+        while app.resource_mut::<Ring>().finish(timer).is_none() {
+            Ring::turn(&mut app);
+            seen.push(fake.raw(BL));
+        }
+    }
+    let jumps: Vec<u32> = seen.windows(2).map(|w| w[0].abs_diff(w[1])).collect();
+    assert!(jumps.iter().all(|&j| j <= 12), "{seen:?}");
+    assert_eq!(fake.raw(BL), raw(0.60));
 }

@@ -19,7 +19,7 @@ use crate::events::{
     LuxRead, Published, ReadLux, SaveState, SetRange, Settings, SettingsApplied, UserSetAuto,
     UserSetBrightness,
 };
-use crate::fade::{AUTO_RATE, Fade, USER_RATE};
+use crate::fade::{Fade, Motion};
 use crate::model::{Curve, Levels, from_raw, to_raw};
 use crate::smooth::{Range, Ranger, Smoother, worth_moving};
 
@@ -45,7 +45,7 @@ impl Default for Timing {
     fn default() -> Self {
         Timing {
             poll: Duration::from_secs(1),
-            frame: Duration::from_millis(33),
+            frame: Duration::from_millis(16),
             hold: Duration::from_secs(5),
             rise: Duration::from_secs(2),
             fall: Duration::from_secs(8),
@@ -203,9 +203,9 @@ impl Core {
         to_raw(p, self.gamma, self.backlight.max)
     }
 
-    fn retarget(&mut self, ring: &mut Ring, target: f64, rate: f64) {
+    fn retarget(&mut self, ring: &mut Ring, target: f64, motion: Motion) {
         self.target = target;
-        self.fade.retarget(target, rate);
+        self.fade.retarget(target, motion);
         if !self.fade.done() {
             self.arm_frame(ring);
         }
@@ -303,7 +303,7 @@ fn on_start(app: &mut App, _: &BeforeWait) {
         }
         core.started = true;
         let target = core.target;
-        core.retarget(&mut ring, target, AUTO_RATE);
+        core.retarget(&mut ring, target, Motion::Auto);
         let seed = core.seeded.then(|| core.save_state());
         (core.update_poll(&mut ring), core.sensor_available, seed)
     };
@@ -391,7 +391,7 @@ fn on_lux(app: &mut App, e: &LuxRead) {
                 None => None,
             };
             if let Some(up) = up {
-                core.retarget(&mut ring, new, AUTO_RATE);
+                core.retarget(&mut ring, new, Motion::Auto);
                 core.following = core.still_behind(up, new, goal).then_some(up);
             }
         }
@@ -413,7 +413,7 @@ fn on_user_brightness(app: &mut App, e: &UserSetBrightness) {
         let curve = core.curve.clone();
         let target = core.levels.user_set(e.0, &curve, lux);
         core.following = None;
-        core.retarget(&mut ring, target, USER_RATE);
+        core.retarget(&mut ring, target, Motion::User);
         core.hold_until = Some(Instant::now() + core.timing.hold);
         core.save_state()
     };
@@ -428,7 +428,7 @@ fn on_user_auto(app: &mut App, e: &UserSetAuto) {
         let read = core.update_poll(&mut ring);
         let target = core.compute_target();
         core.following = None;
-        core.retarget(&mut ring, target, AUTO_RATE);
+        core.retarget(&mut ring, target, Motion::Auto);
         (read, core.save_state())
     };
     if read {
@@ -448,7 +448,7 @@ fn on_settings(app: &mut App, e: &SettingsApplied) {
         let read = core.update_poll(&mut ring);
         let target = core.compute_target();
         core.following = None;
-        core.retarget(&mut ring, target, AUTO_RATE);
+        core.retarget(&mut ring, target, Motion::Auto);
         // One frame even if the fade is done: a new gamma changes the raw value.
         core.arm_frame(&mut ring);
         read
