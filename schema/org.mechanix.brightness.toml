@@ -2,8 +2,8 @@ namespace = "org.mechanix.brightness"
 version = 1
 dir = "mxbrightnessd"
 
-[groups.brightness]
-label = "Brightness"
+[groups.screen]
+label = "Screen"
 order = 10
 
 [groups.curve]
@@ -14,13 +14,13 @@ order = 20
 label = "Devices"
 order = 30
 
-[keys.brightness.auto]
+[keys.screen.auto]
 type = "bool"
 default = true
 label = "Automatic"
 description = "Follow ambient light when a light sensor exists."
 
-[keys.brightness.offset]
+[keys.screen.offset]
 type = "float"
 default = 0.0
 min = -1.0
@@ -28,7 +28,7 @@ max = 1.0
 label = "Offset"
 description = "The user's shift of the ambient curve in automatic mode, in perceived brightness."
 
-[keys.brightness.manual]
+[keys.screen.manual]
 type = "float"
 default = 0.5
 min = 0.0
@@ -36,7 +36,7 @@ max = 1.0
 label = "Manual level"
 description = "The perceived brightness in manual mode."
 
-[keys.brightness.minimum]
+[keys.screen.minimum]
 type = "float"
 default = 0.05
 min = 0.0
@@ -44,7 +44,7 @@ max = 1.0
 label = "Minimum"
 description = "The lowest perceived brightness any setting reaches."
 
-[keys.brightness.gamma]
+[keys.screen.gamma]
 type = "float"
 default = 2.2
 min = 1.0

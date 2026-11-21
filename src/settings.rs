@@ -17,48 +17,25 @@ use std::time::{Duration, Instant};
 
 use app::prelude::*;
 use mxconfig::runtime::Drive;
-use mxconfig::{Diagnostic, Edit, Event, FromSettings, Namespace, Source, Value};
+use mxconfig::{Diagnostic, Edit, Event, Source, Value};
 use ring::prelude::*;
 
 use crate::events::{SaveState, Settings, SettingsApplied};
 use crate::model::Curve;
 
-const AUTO: &str = "brightness.auto";
-const OFFSET: &str = "brightness.offset";
-const MANUAL: &str = "brightness.manual";
-const MINIMUM: &str = "brightness.minimum";
-const GAMMA: &str = "brightness.gamma";
-const CURVE_LUX: &str = "curve.lux";
-const CURVE_LEVEL: &str = "curve.level";
-const BACKLIGHT: &str = "device.backlight";
-const SENSOR: &str = "device.sensor";
+mod schema {
+    mxconfig::client!("schema/org.mechanix.brightness.toml");
+}
+
+use schema::Brightness;
+
+/// The keys a save writes, in one write.
+const AUTO: &str = "screen.auto";
+const OFFSET: &str = "screen.offset";
+const MANUAL: &str = "screen.manual";
 
 /// `poll(2)`'s `POLLIN`.
 const POLLIN: u32 = 1;
-
-/// The namespace's client. Written by hand: `mxconfig::client!` refuses
-/// this schema, as its group `brightness` and the namespace would both
-/// become the type `Brightness`.
-struct Config {
-    settings: mxconfig::Settings,
-}
-
-impl FromSettings for Config {
-    fn from_settings(settings: mxconfig::Settings) -> Self {
-        Config { settings }
-    }
-}
-
-impl Namespace for Config {
-    const NAMESPACE: &'static str = "org.mechanix.brightness";
-    const SCHEMA: &'static str = include_str!("../schema/org.mechanix.brightness.toml");
-    /// Nothing typed: every change rebuilds the whole [`Settings`].
-    type Change = ();
-
-    fn change(_: &mxconfig::Change) -> Option<()> {
-        Some(())
-    }
-}
 
 /// Open the settings from this system's files, synchronously.
 pub fn load() -> (Source, Settings) {
@@ -72,18 +49,16 @@ pub fn load_from(source: Source) -> (Source, Settings) {
     // `SettingsModule` takes its own copy of the fd, or logs the failure.
     let _ = source.inotify_fd();
     let config = open(&source);
-    let settings = config
-        .as_ref()
-        .map_or_else(Settings::default, |c| read(&c.settings));
+    let settings = config.as_ref().map_or_else(Settings::default, read);
     (source, settings)
 }
 
 /// Request the namespace and take its answer: from files it comes at once.
-fn open(source: &Source) -> Option<Config> {
-    source.request::<Config>();
+fn open(source: &Source) -> Option<Brightness> {
+    source.request::<Brightness>();
     let mut config = None;
     for outcome in source.outcomes() {
-        match outcome.event::<Config>() {
+        match outcome.event::<Brightness>() {
             Some(Event::Opened(opened)) => config = Some(opened),
             Some(Event::OpenFailed(e)) => eprintln!("mxbrightnessd: settings did not open: {e}"),
             Some(Event::Diagnosed(diagnostics)) => log(&diagnostics),
@@ -100,49 +75,35 @@ fn log(diagnostics: &[Diagnostic]) {
     }
 }
 
-fn number(value: &Value) -> Option<f64> {
-    value
-        .as_float()
-        .or_else(|| value.as_integer().map(|i| i as f64))
-}
-
-/// `key` as a finite float, else `default`.
-fn float(config: &mxconfig::Settings, key: &str, default: f64) -> f64 {
-    match config.get(key).as_ref().and_then(number) {
-        Some(v) if v.is_finite() => v,
-        Some(v) => {
-            eprintln!("mxbrightnessd: settings: {key} = {v} is not finite; using {default}");
-            default
-        }
-        None => default,
+/// `value` of `key` if finite, else `default`.
+fn finite(key: &str, value: f64, default: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        eprintln!("mxbrightnessd: settings: {key} = {value} is not finite; using {default}");
+        default
     }
 }
 
-/// `key` as a list of floats; `None` if unset or any element is not a number.
-fn floats(config: &mxconfig::Settings, key: &str) -> Option<Vec<f64>> {
-    let value = config.get(key)?;
-    value.as_array()?.iter().map(number).collect()
-}
-
-fn string(config: &mxconfig::Settings, key: &str) -> Option<String> {
-    config.get(key)?.as_str().map(str::to_string)
+/// A list of floats; `None` if any element is not a number.
+fn floats(values: &[Value]) -> Option<Vec<f64>> {
+    let number = |v: &Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
+    values.iter().map(number).collect()
 }
 
 /// The curve from `curve.lux` and `curve.level`, else the default one.
-fn curve(config: &mxconfig::Settings) -> Curve {
-    let built = match (floats(config, CURVE_LUX), floats(config, CURVE_LEVEL)) {
+fn curve(config: &Brightness) -> Curve {
+    let curve = config.curve();
+    let built = match (floats(&curve.lux()), floats(&curve.level())) {
         (Some(lux), Some(level)) if lux.len() == level.len() => {
             Curve::new(lux.into_iter().zip(level).collect())
         }
         (Some(lux), Some(level)) => Err(format!(
-            "{CURVE_LUX} has {} points and {CURVE_LEVEL} {}",
+            "curve.lux has {} points and curve.level {}",
             lux.len(),
             level.len()
         )),
-        (None, None) => return Curve::default(),
-        _ => Err(format!(
-            "{CURVE_LUX} and {CURVE_LEVEL} must be lists of numbers"
-        )),
+        _ => Err("curve.lux and curve.level must be lists of numbers".to_string()),
     };
     built.unwrap_or_else(|e| {
         eprintln!("mxbrightnessd: settings: bad curve, using the default: {e}");
@@ -151,17 +112,19 @@ fn curve(config: &mxconfig::Settings) -> Curve {
 }
 
 /// The settings `config` holds now.
-fn read(config: &mxconfig::Settings) -> Settings {
+fn read(config: &Brightness) -> Settings {
     let d = Settings::default();
+    let screen = config.screen();
+    let device = config.device();
     Settings {
-        auto: config.get(AUTO).and_then(|v| v.as_bool()).unwrap_or(d.auto),
-        offset: float(config, OFFSET, d.offset),
-        manual: float(config, MANUAL, d.manual),
-        minimum: float(config, MINIMUM, d.minimum),
-        gamma: float(config, GAMMA, d.gamma),
+        auto: screen.auto(),
+        offset: finite(OFFSET, screen.offset(), d.offset),
+        manual: finite(MANUAL, screen.manual(), d.manual),
+        minimum: finite("screen.minimum", screen.minimum(), d.minimum),
+        gamma: finite("screen.gamma", screen.gamma(), d.gamma),
         curve: curve(config),
-        backlight: string(config, BACKLIGHT),
-        sensor: string(config, SENSOR),
+        backlight: device.backlight(),
+        sensor: device.sensor(),
     }
 }
 
@@ -176,7 +139,7 @@ pub struct SettingsModule {
 struct Follow {
     source: Source,
     /// `None` if the namespace did not open: nothing is followed or saved.
-    config: Option<Config>,
+    config: Option<Brightness>,
     /// The inotify fd and the poll armed on it, while it is watched.
     inotify: Option<(File, Token)>,
     save_delay: Duration,
@@ -207,9 +170,7 @@ impl Module for SettingsModule {
         };
         // Opening again returns the handle `load` opened.
         let config = open(&self.source);
-        let applied = config
-            .as_ref()
-            .map_or_else(Settings::default, |c| read(&c.settings));
+        let applied = config.as_ref().map_or_else(Settings::default, read);
         app.insert_resource(Follow {
             source: self.source,
             config,
@@ -273,7 +234,7 @@ fn save_if_due(follow: &mut Follow, ring: &mut Ring) {
     let Some(config) = &follow.config else {
         return;
     };
-    config.settings.write(&[
+    config.settings().write(&[
         Edit::set(AUTO, Value::Boolean(state.auto)),
         Edit::set(OFFSET, Value::Float(state.offset)),
         Edit::set(MANUAL, Value::Float(state.manual)),
@@ -316,8 +277,8 @@ impl Follow {
     fn drain(&mut self) -> Option<Settings> {
         let mut changed = false;
         for outcome in self.source.outcomes() {
-            match outcome.event::<Config>() {
-                Some(Event::Changed(())) => changed = true,
+            match outcome.event::<Brightness>() {
+                Some(Event::Changed(_)) => changed = true,
                 Some(Event::Diagnosed(diagnostics)) => log(&diagnostics),
                 Some(Event::WriteFailed { error, .. }) => {
                     eprintln!("mxbrightnessd: settings: not saved: {error}");
@@ -329,7 +290,7 @@ impl Follow {
             }
         }
         let config = self.config.as_ref().filter(|_| changed)?;
-        let mut settings = read(&config.settings);
+        let mut settings = read(config);
         // The file's levels are older than the ones waiting to be saved.
         if self.pending.is_some() {
             settings.auto = self.applied.auto;

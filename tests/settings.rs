@@ -110,7 +110,7 @@ fn defaults_load() {
 #[test]
 fn user_file_overrides() {
     let dir = TempDir::new().unwrap();
-    write_user(&dir, "[brightness]\nminimum = 0.1\n");
+    write_user(&dir, "[screen]\nminimum = 0.1\n");
     let (_, settings) = load_from(source(&dir));
     assert_eq!(settings.minimum, 0.1);
     assert_eq!(settings.gamma, 2.2);
@@ -121,7 +121,7 @@ fn every_key_is_read() {
     let dir = TempDir::new().unwrap();
     write_user(
         &dir,
-        "[brightness]\nauto = false\noffset = -0.2\nmanual = 0.7\nminimum = 0.02\ngamma = 2.5\n\
+        "[screen]\nauto = false\noffset = -0.2\nmanual = 0.7\nminimum = 0.02\ngamma = 2.5\n\
          [curve]\nlux = [1.0, 100.0]\nlevel = [0.2, 0.9]\n\
          [device]\nbacklight = \"panel\"\nsensor = \"opt3001\"\n",
     );
@@ -158,10 +158,7 @@ fn unsorted_curve_falls_back() {
 #[test]
 fn non_finite_falls_back() {
     let dir = TempDir::new().unwrap();
-    write_user(
-        &dir,
-        "[brightness]\ngamma = nan\noffset = inf\nminimum = 0.1\n",
-    );
+    write_user(&dir, "[screen]\ngamma = nan\noffset = inf\nminimum = 0.1\n");
     let (_, settings) = load_from(source(&dir));
     assert_eq!(settings.gamma, 2.2);
     assert_eq!(settings.offset, 0.0);
@@ -191,9 +188,9 @@ fn drag_saves_once() {
     }
     assert_eq!(inodes.len(), 1, "written once");
     let file = read_user(&dir);
-    assert_eq!(float(&file, "brightness", "manual"), 0.3 + 0.01 * 19.0);
-    assert_eq!(float(&file, "brightness", "offset"), -0.1);
-    assert_eq!(file["brightness"]["auto"].as_bool(), Some(false));
+    assert_eq!(float(&file, "screen", "manual"), 0.3 + 0.01 * 19.0);
+    assert_eq!(float(&file, "screen", "offset"), -0.1);
+    assert_eq!(file["screen"]["auto"].as_bool(), Some(false));
     assert!(
         applied(&app).is_empty(),
         "our own write is not applied back"
@@ -211,9 +208,9 @@ fn drag_after_save() {
     });
     send(&mut app, state(0.8, 0.0));
     run_for(&mut app, Duration::from_millis(10));
-    assert_eq!(float(&read_user(&dir), "brightness", "manual"), 0.4);
+    assert_eq!(float(&read_user(&dir), "screen", "manual"), 0.4);
     run_for(&mut app, Duration::from_millis(200));
-    assert_eq!(float(&read_user(&dir), "brightness", "manual"), 0.8);
+    assert_eq!(float(&read_user(&dir), "screen", "manual"), 0.8);
     assert!(applied(&app).is_empty(), "the echo of 0.4 is not applied");
 }
 
@@ -222,7 +219,7 @@ fn file_edit_applies_live() {
     let dir = TempDir::new().unwrap();
     let mut app = app(&dir);
     run_for(&mut app, Duration::from_millis(5));
-    write_user(&dir, "[brightness]\nminimum = 0.2\n");
+    write_user(&dir, "[screen]\nminimum = 0.2\n");
     run_until(&mut app, Duration::from_secs(2), |app| {
         !applied(app).is_empty()
     });
@@ -241,7 +238,7 @@ fn file_edit_while_saving_keeps_the_pending_state() {
     let dir = TempDir::new().unwrap();
     let mut app = app(&dir);
     send(&mut app, state(0.6, 0.1));
-    write_user(&dir, "[brightness]\nminimum = 0.2\nmanual = 0.9\n");
+    write_user(&dir, "[screen]\nminimum = 0.2\nmanual = 0.9\n");
     run_until(&mut app, Duration::from_secs(2), |app| {
         !applied(app).is_empty()
     });
@@ -250,7 +247,7 @@ fn file_edit_while_saving_keeps_the_pending_state() {
     assert_eq!((got.auto, got.offset, got.manual), (false, 0.1, 0.6));
     run_for(&mut app, Duration::from_millis(200));
     let file = read_user(&dir);
-    assert_eq!(float(&file, "brightness", "manual"), 0.6);
-    assert_eq!(float(&file, "brightness", "minimum"), 0.2);
+    assert_eq!(float(&file, "screen", "manual"), 0.6);
+    assert_eq!(float(&file, "screen", "minimum"), 0.2);
     assert_eq!(applied(&app).len(), 1, "the save's echo is not applied");
 }
