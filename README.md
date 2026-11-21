@@ -13,7 +13,7 @@ Session bus, name `org.mechanix.Brightness`, path `/org/mechanix/Brightness`, in
 | `Brightness` | `d` | read-write | Perceived level, 0..1. Reads the level being faded to. Setting it in automatic mode shifts the curve; in manual mode it sets the level. Clamped to `[Minimum, 1]`; NaN/inf are rejected. |
 | `Auto` | `b` | read-write | Automatic brightness on/off. |
 | `Minimum` | `d` | read | The floor for every level. Set through settings. |
-| `AmbientLux` | `d` | read | Smoothed sensor reading (sensor units, not calibrated lux). |
+| `AmbientLux` | `d` | read | Smoothed sensor reading (sensor units, not calibrated lux), updated when it moves 5 %; 0 while automatic mode is off. |
 | `AutoAvailable` | `b` | read | False when no light sensor was found; automatic mode then acts as manual. |
 
 ```sh
@@ -26,7 +26,7 @@ busctl --user set-property org.mechanix.Brightness /org/mechanix/Brightness org.
 
 Namespace `org.mechanix.brightness` (`schema/org.mechanix.brightness.toml`). Edits apply live, e.g. `mxconfig set org.mechanix.brightness screen.minimum 0.08`.
 
-- `screen.auto`, `screen.offset`, `screen.manual`: the user's state, written by the daemon about 2 s after the last slider change.
+- `screen.auto`, `screen.offset`, `screen.manual`: the user's state, written by the daemon about 2 s after the last slider change. Until `screen.manual` is set, the daemon starts at the backlight's current level and saves that as the manual level.
 - `screen.minimum` (0.05), `screen.gamma` (2.2): `raw = max · p^gamma`, never below raw 1.
 - `curve.lux` / `curve.level`: the ambient curve, sensor lux → perceived level, linear in log10(lux).
 - `device.backlight`, `device.sensor`: pick devices by name when the automatic choice is wrong.
