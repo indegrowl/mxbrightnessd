@@ -10,7 +10,7 @@ use mxbrightnessd::devices::{Backlight, LightSensor};
 use mxbrightnessd::events::{
     LuxRead, Published, SaveState, Settings, SettingsApplied, UserSetAuto, UserSetBrightness,
 };
-use mxbrightnessd::model::to_raw;
+use mxbrightnessd::model::{from_raw, to_raw};
 use mxbrightnessd::sensor::SensorModule;
 use ring::prelude::*;
 
@@ -61,6 +61,19 @@ fn fake(cur: u32, lux: Option<&str>) -> FakeSys {
 }
 
 fn app_with(fake: &FakeSys, settings: Settings) -> App {
+    app_timed(fake, settings, timing())
+}
+
+/// Smoothing slow next to the poll, as in production (1 s poll, 2 s/8 s).
+fn slow_timing() -> Timing {
+    Timing {
+        rise: Duration::from_millis(40),
+        fall: Duration::from_millis(160),
+        ..timing()
+    }
+}
+
+fn app_timed(fake: &FakeSys, settings: Settings, timing: Timing) -> App {
     let backlight = Backlight::find(fake.root(), None).expect("backlight");
     let sensor = LightSensor::find(fake.root(), None);
     let sensor_available = sensor.is_some();
@@ -73,7 +86,7 @@ fn app_with(fake: &FakeSys, settings: Settings) -> App {
         backlight,
         sensor_available,
         settings,
-        timing: timing(),
+        timing,
     })
     .init_resource::<Seen>()
     .system(note_published)
@@ -289,4 +302,60 @@ fn settings_apply_and_bad_values_are_clamped() {
     assert_eq!((p.brightness, p.minimum), (1.0, 1.0));
     assert_eq!(fake.raw(BL), 255);
     assert!(app.resource::<Seen>().saved.is_empty());
+}
+
+#[test]
+fn auto_start_holds_until_first_reading() {
+    let fake = fake(178, Some("garbage"));
+    let mut app = app_with(&fake, Settings::default());
+    run_for(&mut app, Duration::from_millis(300));
+    assert_eq!(fake.raw(BL), 178);
+    let start = from_raw(178, 2.2, MAX);
+    assert!((last_published(&app).brightness - start).abs() < 1e-9);
+    fake.set_lux(0, "0.3");
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.30));
+}
+
+#[test]
+fn slow_smoothing_darkening_settles_on_curve() {
+    let fake = fake(128, Some("300"));
+    let mut app = app_timed(&fake, Settings::default(), slow_timing());
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), 255);
+    fake.set_lux(0, "3");
+    run_for(&mut app, SETTLE);
+    assert!(near(fake.raw(BL), raw(0.50), 1), "{}", fake.raw(BL));
+}
+
+#[test]
+fn slow_smoothing_brightening_settles_on_curve() {
+    let fake = fake(128, Some("3"));
+    let mut app = app_timed(&fake, Settings::default(), slow_timing());
+    run_for(&mut app, SETTLE);
+    assert_eq!(fake.raw(BL), raw(0.50));
+    fake.set_lux(0, "30");
+    run_for(&mut app, SETTLE);
+    assert!(near(fake.raw(BL), raw(0.75), 1), "{}", fake.raw(BL));
+}
+
+#[test]
+fn steady_noisy_light_stops_moving() {
+    let fake = fake(128, Some("100"));
+    let mut app = app_timed(&fake, Settings::default(), slow_timing());
+    let flip = |app: &mut App, ms: u64| {
+        let end = std::time::Instant::now() + Duration::from_millis(ms);
+        let mut out = Vec::new();
+        let mut high = false;
+        while std::time::Instant::now() < end {
+            high = !high;
+            fake.set_lux(0, if high { "110" } else { "100" });
+            run_for(app, Duration::from_millis(30));
+            out.push((fake.raw(BL), last_published(app).brightness));
+        }
+        out
+    };
+    flip(&mut app, 1500);
+    let after = flip(&mut app, 1000);
+    assert!(after.windows(2).all(|w| w[0] == w[1]), "{after:?}");
 }

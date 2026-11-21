@@ -76,7 +76,7 @@ impl Module for CoreModule {
             levels,
             fade: Fade::new(start),
             target: start,
-            following: false,
+            following: None,
             smoother: Smoother::new(self.timing.rise, self.timing.fall),
             ranger: Ranger::new(Range::Sensitive),
             last_reading: None,
@@ -112,9 +112,11 @@ struct Core {
     fade: Fade,
     /// Where the fade is heading; what `Published.brightness` reports.
     target: f64,
-    /// Following a change in light past the dead band: keep retargeting
-    /// on every reading until the backlight value would stop changing.
-    following: bool,
+    /// Following a change in light past the dead band (`Some(true)`
+    /// upward, `Some(false)` downward): every reading retargets to the
+    /// smoothed level until that maps to the same raw value as the
+    /// latest reading's own level, or the reading lies behind it.
+    following: Option<bool>,
     smoother: Smoother,
     ranger: Ranger,
     last_reading: Option<Instant>,
@@ -160,8 +162,23 @@ impl Core {
         }
     }
 
+    /// The level to head for. In auto mode before the first reading it
+    /// holds where it is (within the minimum) rather than fading toward
+    /// the manual level and back.
     fn compute_target(&self) -> f64 {
+        if self.polling() && self.smoother.value().is_none() {
+            return self.target.clamp(self.levels.minimum, 1.0);
+        }
         self.levels.target(&self.curve, self.lux())
+    }
+
+    /// Whether the smoothed level `new` is still short of `goal`, the
+    /// latest reading's level, in raw terms, moving in direction `up`.
+    /// A reading level with or behind it ends the follow, so noise
+    /// around a steady light does not keep it going.
+    fn still_behind(&self, up: bool, new: f64, goal: f64) -> bool {
+        let (new, goal) = (self.raw(new), self.raw(goal));
+        if up { goal > new } else { goal < new }
     }
 
     fn polling(&self) -> bool {
@@ -320,18 +337,22 @@ fn on_lux(app: &mut App, e: &LuxRead) {
         let now = Instant::now();
         let dt = core.last_reading.map_or(Duration::ZERO, |t| now - t);
         core.last_reading = Some(now);
+        let first = core.smoother.value().is_none();
         let smoothed = core.smoother.push(lux, dt);
         let range = core.ranger.next(smoothed);
         let held = core.hold_until.is_some_and(|until| now < until);
         if !held {
             let new = core.compute_target();
+            let goal = core.levels.target(&core.curve, Some(lux));
             let current = core.target;
-            if worth_moving(current, new) || (core.following && core.raw(new) != core.raw(current))
-            {
-                core.following = true;
+            let up = match core.following {
+                Some(up) => Some(up),
+                None if first || worth_moving(current, new) => Some(new > current),
+                None => None,
+            };
+            if let Some(up) = up {
                 core.retarget(&mut ring, new, AUTO_RATE);
-            } else {
-                core.following = false;
+                core.following = core.still_behind(up, new, goal).then_some(up);
             }
         }
         range
@@ -351,7 +372,7 @@ fn on_user_brightness(app: &mut App, e: &UserSetBrightness) {
         let lux = core.lux();
         let curve = core.curve.clone();
         let target = core.levels.user_set(e.0, &curve, lux);
-        core.following = false;
+        core.following = None;
         core.retarget(&mut ring, target, USER_RATE);
         core.hold_until = Some(Instant::now() + core.timing.hold);
         core.save_state()
@@ -366,7 +387,7 @@ fn on_user_auto(app: &mut App, e: &UserSetAuto) {
         core.levels.auto = e.0;
         let read = core.update_poll(&mut ring);
         let target = core.compute_target();
-        core.following = false;
+        core.following = None;
         core.retarget(&mut ring, target, AUTO_RATE);
         (read, core.save_state())
     };
@@ -386,7 +407,7 @@ fn on_settings(app: &mut App, e: &SettingsApplied) {
         core.curve = e.0.curve.clone();
         let read = core.update_poll(&mut ring);
         let target = core.compute_target();
-        core.following = false;
+        core.following = None;
         core.retarget(&mut ring, target, AUTO_RATE);
         // One frame even if the fade is done: a new gamma changes the raw value.
         core.arm_frame(&mut ring);
