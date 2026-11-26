@@ -31,10 +31,7 @@ fn app_with(fake: &FakeSys) -> App {
 }
 
 fn load(app: &mut App, settings: Settings) {
-    app.signal(SettingsLoaded {
-        settings,
-        manual_saved: true,
-    });
+    app.signal(SettingsLoaded(settings));
     app.flush();
 }
 

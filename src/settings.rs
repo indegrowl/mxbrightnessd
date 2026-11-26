@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use app::prelude::*;
 use config::prelude::*;
-use mxconfig::{Diagnostic, Edit, Event, Origin, Value};
+use mxconfig::{Diagnostic, Edit, Event, Value};
 use ring::prelude::*;
 
 use crate::events::{SaveState, Settings, SettingsApplied, SettingsLoaded};
@@ -95,12 +95,6 @@ fn read(config: &Brightness) -> Settings {
     }
 }
 
-/// Whether some layer sets `screen.manual`, rather than the schema.
-fn manual_saved(config: &Brightness) -> bool {
-    let origin = config.settings().resolved().origin(MANUAL).cloned();
-    !matches!(origin, None | Some(Origin::Schema))
-}
-
 /// Opens the settings, follows them and saves the user's levels. Install
 /// after `RingModule` and `ConfigModule`.
 pub struct SettingsModule {
@@ -143,21 +137,15 @@ impl Module for SettingsModule {
 fn on_config(app: &mut App, ConfigEvent(event): &ConfigEvent<Brightness>) {
     match event {
         Event::Opened(config) => {
-            let loaded = SettingsLoaded {
-                settings: read(config),
-                manual_saved: manual_saved(config),
-            };
+            let settings = read(config);
             let mut follow = app.resource_mut::<Follow>();
             follow.config = Some(config.clone());
-            follow.applied = loaded.settings.clone();
-            app.signal(loaded);
+            follow.applied = settings.clone();
+            app.signal(SettingsLoaded(settings));
         }
         Event::OpenFailed(e) => {
             eprintln!("mxbrightnessd: settings did not open: {e}");
-            app.signal(SettingsLoaded {
-                settings: Settings::default(),
-                manual_saved: false,
-            });
+            app.signal(SettingsLoaded(Settings::default()));
         }
         Event::Changed(_) => {
             if let Some(settings) = app.resource_mut::<Follow>().changed() {

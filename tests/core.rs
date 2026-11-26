@@ -74,10 +74,6 @@ fn slow_timing() -> Timing {
 }
 
 fn app_timed(fake: &FakeSys, settings: Settings, timing: Timing) -> App {
-    app_full(fake, settings, timing, true)
-}
-
-fn app_full(fake: &FakeSys, settings: Settings, timing: Timing, manual_saved: bool) -> App {
     let backlight = Backlight::find(fake.root(), None).expect("backlight");
     let sensor = LightSensor::find(fake.root(), None);
     let sensor_available = sensor.is_some();
@@ -94,7 +90,6 @@ fn app_full(fake: &FakeSys, settings: Settings, timing: Timing, manual_saved: bo
         backlight,
         sensor_available,
         settings,
-        manual_saved,
         timing,
     });
     app
@@ -279,12 +274,19 @@ fn no_sensor_is_manual_and_unavailable() {
         ..Settings::default()
     };
     let mut app = app_with(&fake, settings);
-    settle_at(&mut app, &fake, raw(0.7));
+    run_for(&mut app, Duration::from_millis(300));
+    // Manual without a sensor: it stays at the level the system booted with.
     let p = last_published(&app);
     assert!(!p.auto_available, "{p:?}");
-    assert_eq!(p.brightness, 0.7);
+    assert!(
+        (p.brightness - from_raw(128, 2.2, MAX)).abs() < 1e-9,
+        "{p:?}"
+    );
     assert_eq!(p.ambient_lux, None);
-    assert_eq!(fake.raw(BL), raw(0.7));
+    assert_eq!(fake.raw(BL), 128);
+    send(&mut app, UserSetBrightness(0.7));
+    settle_at(&mut app, &fake, raw(0.7));
+    assert_eq!(last_published(&app).brightness, 0.7);
 }
 
 #[test]
@@ -390,17 +392,20 @@ fn steady_noisy_light_stops_moving() {
 }
 
 #[test]
-fn unsaved_manual_keeps_the_current_level() {
+fn manual_starts_at_the_current_level_not_the_saved_one() {
     let fake = fake(178, None);
-    let mut app = app_full(&fake, Settings::default(), timing(), false);
+    let settings = Settings {
+        auto: false,
+        manual: 0.2,
+        ..Settings::default()
+    };
+    let mut app = app_with(&fake, settings);
     run_for(&mut app, Duration::from_secs(2));
-    assert_eq!(fake.raw(BL), 178);
+    assert_eq!(fake.raw(BL), 178, "the saved level is not restored");
     let start = from_raw(178, 2.2, MAX);
     assert!((last_published(&app).brightness - start).abs() < 1e-9);
-    let saved = app.resource::<Seen>().saved.clone();
-    assert_eq!(saved.len(), 1, "{saved:?}");
-    assert!((saved[0].manual - start).abs() < 1e-9, "{saved:?}");
-    assert!(saved[0].auto && saved[0].offset == 0.0, "{saved:?}");
+    let saved = &app.resource::<Seen>().saved;
+    assert!(saved.is_empty(), "nothing is saved at start: {saved:?}");
 }
 
 #[test]

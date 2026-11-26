@@ -38,12 +38,12 @@ impl Module for StartModule {
     }
 }
 
-fn on_loaded(app: &mut App, e: &SettingsLoaded) {
+fn on_loaded(app: &mut App, SettingsLoaded(settings): &SettingsLoaded) {
     let (root, timing) = {
         let start = app.resource::<Start>();
         (start.root.clone(), start.timing)
     };
-    let backlight = match Backlight::find(&root, e.settings.backlight.as_deref()) {
+    let backlight = match Backlight::find(&root, settings.backlight.as_deref()) {
         Ok(backlight) => backlight,
         Err(error) => {
             eprintln!("mxbrightnessd: no backlight: {error}");
@@ -52,7 +52,7 @@ fn on_loaded(app: &mut App, e: &SettingsLoaded) {
             return;
         }
     };
-    let sensor = LightSensor::find(&root, e.settings.sensor.as_deref());
+    let sensor = LightSensor::find(&root, settings.sensor.as_deref());
     let sensor_available = sensor.is_some();
     match sensor {
         Some(sensor) => {
@@ -63,8 +63,7 @@ fn on_loaded(app: &mut App, e: &SettingsLoaded) {
     app.add_module(CoreModule {
         backlight,
         sensor_available,
-        settings: e.settings.clone(),
-        manual_saved: e.manual_saved,
+        settings: settings.clone(),
         timing,
     });
 }

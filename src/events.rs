@@ -33,12 +33,7 @@ impl Signal for UserSetAuto {}
 /// The settings to start with: once, when the namespace opened, or the
 /// defaults if it did not.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SettingsLoaded {
-    pub settings: Settings,
-    /// Some layer sets `screen.manual`; else its value is the schema's
-    /// default, not a level anyone chose.
-    pub manual_saved: bool,
-}
+pub struct SettingsLoaded(pub Settings);
 impl Signal for SettingsLoaded {}
 
 /// New settings, from the config file.
