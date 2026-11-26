@@ -51,7 +51,6 @@ As root on the device:
 ```sh
 install -m755 mxbrightnessd /usr/bin/
 install -m644 data/mxbrightnessd.service /usr/lib/systemd/user/
-install -Dm644 data/brightness.conf /etc/systemd/user/mechanix-session.target.d/brightness.conf
 install -m644 data/90-mxbrightnessd.rules /etc/udev/rules.d/
 install -Dm644 schema/org.mechanix.brightness.toml /usr/share/mxconfig/schemas/org.mechanix.brightness.toml
 usermod -aG video <user>
