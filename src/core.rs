@@ -53,9 +53,9 @@ impl Default for Timing {
     }
 }
 
-/// Owns the brightness level. Install after `RingModule`, and after
-/// `SensorModule` when a sensor exists. It starts on the first ring
-/// turn, so modules added after it still see the first [`Published`].
+/// Owns the brightness level. It starts when installed: install it after
+/// `RingModule`, `SensorModule` when a sensor exists, and every module
+/// that takes its signals, so they see the first [`Published`].
 pub struct CoreModule {
     pub backlight: Backlight,
     /// A `SensorModule` is installed; without one auto mode acts as manual.
@@ -100,17 +100,16 @@ impl Module for CoreModule {
             write_failing: false,
             cancelled: Vec::new(),
             published: None,
-            started: false,
             seeded,
         };
         core.target = core.compute_target();
         app.insert_resource(core);
-        app.system(on_start)
-            .system(on_io)
+        app.system(on_io)
             .system(on_lux)
             .system(on_user_brightness)
             .system(on_user_auto)
             .system(on_settings);
+        begin(app);
     }
 }
 
@@ -144,7 +143,6 @@ struct Core {
     /// A cancelled poll timer and its cancel op, finished when they complete.
     cancelled: Vec<Token>,
     published: Option<Published>,
-    started: bool,
     /// The manual level came from the backlight at start and is not saved yet.
     seeded: bool,
 }
@@ -293,15 +291,10 @@ fn publish(app: &mut App) {
 }
 
 /// Start: fade from the current backlight to the target, ask for the
-/// first reading, publish, and save a seeded manual level. Runs once,
-/// before the first wait.
-fn on_start(app: &mut App, _: &BeforeWait) {
+/// first reading, publish, and save a seeded manual level.
+fn begin(app: &mut App) {
     let (read, sensor, seed) = {
         let (mut core, mut ring) = app.query::<(ResMut<Core>, ResMut<Ring>)>();
-        if core.started {
-            return;
-        }
-        core.started = true;
         let target = core.target;
         core.retarget(&mut ring, target, Motion::Auto);
         let seed = core.seeded.then(|| core.save_state());

@@ -2,7 +2,7 @@
 
 Brightness daemon for Mechanix OS. It owns the display backlight: it follows the ambient light sensor (automatic mode), applies the user's slider as an offset on the ambient curve, never goes below a minimum level, and serves all of it on D-Bus for the launcher.
 
-It is a user service on the session bus, built on [mecha-wayland](https://github.com/mecha-org/mecha-wayland)'s `app`, `ring` and `dbus` crates (one io_uring loop, plus one thread that waits on the light sensor). Settings live in [mxconfig](https://github.com/mecha-org/mxconfig).
+It is a user service on the session bus, built on [mecha-wayland](https://github.com/mecha-org/mecha-wayland)'s `app`, `ring`, `dbus` and `config` crates (one io_uring loop, plus one thread that waits on the light sensor). Settings live in [mxconfig](https://github.com/mecha-org/mxconfig).
 
 ## D-Bus
 

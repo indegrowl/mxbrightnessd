@@ -82,20 +82,21 @@ fn app_full(fake: &FakeSys, settings: Settings, timing: Timing, manual_saved: bo
     let sensor = LightSensor::find(fake.root(), None);
     let sensor_available = sensor.is_some();
     let mut app = App::new();
-    app.add_module(RingModule::default());
+    app.add_module(RingModule::default())
+        .init_resource::<Seen>()
+        .system(note_published)
+        .system(note_saved);
     if let Some(sensor) = sensor {
         app.add_module(SensorModule { sensor });
     }
+    // Last: the core starts when installed.
     app.add_module(CoreModule {
         backlight,
         sensor_available,
         settings,
         manual_saved,
         timing,
-    })
-    .init_resource::<Seen>()
-    .system(note_published)
-    .system(note_saved);
+    });
     app
 }
 
