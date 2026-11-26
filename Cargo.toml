@@ -7,6 +7,7 @@ edition = "2024"
 app = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev" }
 ring = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev" }
 dbus = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev" }
+config = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev" }
 mxconfig = { git = "https://github.com/mecha-org/mxconfig", rev = "d20b7409f7a27c5d44ded5f5e4a3ee7c4b928eb3" }
 
 [dev-dependencies]

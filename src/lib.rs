@@ -7,3 +7,4 @@ pub mod sensor;
 pub mod service;
 pub mod settings;
 pub mod smooth;
+pub mod start;

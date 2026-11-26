@@ -11,7 +11,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "app"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#fb133ce19f654656a14be913f5ae6e4cb6609141"
+source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#60a833ab6150bd48c15efb9dfa320a9a99e70c8d"
 dependencies = [
  "smallvec",
 ]
@@ -35,9 +35,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "config"
+version = "0.1.0"
+source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#60a833ab6150bd48c15efb9dfa320a9a99e70c8d"
+dependencies = [
+ "app",
+ "dbus",
+ "mxconfig",
+ "ring",
+]
+
+[[package]]
 name = "dbus"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#fb133ce19f654656a14be913f5ae6e4cb6609141"
+source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#60a833ab6150bd48c15efb9dfa320a9a99e70c8d"
 dependencies = [
  "app",
  "ring",
@@ -153,6 +164,7 @@ name = "mxbrightnessd"
 version = "0.1.0"
 dependencies = [
  "app",
+ "config",
  "dbus",
  "mxconfig",
  "ring",
@@ -248,7 +260,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "ring"
 version = "0.1.0"
-source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#fb133ce19f654656a14be913f5ae6e4cb6609141"
+source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#60a833ab6150bd48c15efb9dfa320a9a99e70c8d"
 dependencies = [
  "app",
  "io-uring",

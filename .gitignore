@@ -25,3 +25,7 @@ rustc-ice-*.txt
 
 # Local design docs and plans (never committed)
 /docs
+
+# mechanix-packager output
+/dist/
+/stage/
